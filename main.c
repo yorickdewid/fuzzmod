@@ -1,13 +1,46 @@
+/**
+ * Copyright (C) 2017 Quenza Inc.
+ * All Rights Reserved
+ *
+ * This file is part of the Fuzzmod
+ *
+ * Content can not be copied and/or distributed without the express
+ * permission of the author.
+ */
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <arpa/inet.h>
 #include <netdb.h>
 
 static char *host = NULL;
+
+struct http_response {
+    char version;
+    short code;
+    char *redirect;
+};
+
+void data_block(char buffer[], size_t sz) {
+    int fd = open("/dev/urandom", O_RDONLY);
+    size_t readsz = 0;
+    while (readsz < sz) {
+        ssize_t result = read(fd, buffer + readsz, sz - readsz);
+        if (result < 0)
+            continue;
+        readsz += result;
+    }
+    close(fd);
+}
+
+void parse_header(char buffer[]) {
+    puts(buffer);
+}
 
 int fuzz_start() {
     int sockfd = 0, n = 0;
@@ -35,19 +68,31 @@ int fuzz_start() {
     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("connect()");
         return -1;
-    } 
+    }
 
-    int i;
-    for (i=0; i<100; ++i) {
-        char _woe[128];
-        const char *buf = "GET /%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Fuzzmod/0.1\r\nConnection: close\r\n\r\n";
+    FILE *fp = fopen("urllist.txt", "r");
+    if (!fp) {
+        perror("fopen()");
+        return -1;
+    }
 
-        snprintf(_woe, 128, buf, "woei", host);
+    char *line = NULL; size_t len = 0;
+    while ((getline(&line, &len, fp)) > 0) {
+        char sndbuf[256];
+        const char *buf = "GET /%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Fuzzmod/0.1\r\nConnection: Keep-Alive\r\n\r\n";
 
-        printf("Fetching: %s\n", _woe);
+        data_block(sndbuf, 256);
+        snprintf(sndbuf, 256, buf, line, host);
 
-        send(sockfd, _woe, strlen(_woe), 0);
-        recv(sockfd, recvBuff, 1024, 0);
+        printf("Fetching: /%s -> \n", line);
+
+        send(sockfd, sndbuf, 256, 0);
+        if (recv(sockfd, recvBuff, 1024, 0) < 0)
+            break;
+
+        parse_header(recvBuff);
+
+        // puts(recvBuff);
         // while ((n = recv(sockfd, recvBuff, 1024, 0)) > 0) {
         //     recvBuff[n] = 0;
         //     if (fputs(recvBuff, stdout) == EOF)
@@ -55,17 +100,21 @@ int fuzz_start() {
         // }
     }
 
+    fclose(fp);
     return 0;
 }
 
 void usage(const char *progname) {
-    printf("%s is an network fuzzer\n\n", progname);
-    printf("Usage:\n  %s [OPTION]... URL\n\n", progname);
+    printf("%s is an network service fuzzer\n\n", progname);
+    printf("Usage:\n  %s [OPTION]... HANDLE\n\n", progname);
     printf("General options:\n");
     printf("  -H, --http             http mode\n");
     printf("  -V, --verbose          verbose output\n");
     printf("  -v, --version          print version\n");
     printf("  -h, --help             this help\n");
+    printf("\nHTTP options:\n");
+    printf("      --hide-agent       hide user agent\n");
+    printf("  -f, --uri-file=FILE    read uri requests from file\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -97,8 +146,8 @@ int main(int argc, char *argv[]) {
         }
 
     for (index = optind; index < argc; index++) {
-        host = argv[index];
-        break;
+        if (!host)
+            host = argv[index];
     }
 
     if (!host) {
@@ -107,6 +156,5 @@ int main(int argc, char *argv[]) {
     }
 
     fuzz_start();
-
     return 0;
 }
